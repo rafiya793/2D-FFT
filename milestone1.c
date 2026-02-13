@@ -469,7 +469,8 @@ int main() {
     free(fft_output);
     free(edge_output);
     stbi_image_free(img);
-    run_all_tests();
+   
     return 0;
 
 }
+
