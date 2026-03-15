@@ -201,6 +201,8 @@ stack_recursive:
 .LC40:	.string	"Before reorder:"
 .LC41:	.string	"After reorder (expected: 0 4 2 6 1 5 3 7):"
 .LC42:	.string	"  CORRECTNESS CHECK  (step function, n=8)"
+.LC42b:	.string	"  CORRECTNESS CHECK  (ramp signal, n=16)"
+.LC42c:	.string	"  CORRECTNESS CHECK  (ramp signal, n=32)"
 .LC43:	.string	"\n--- Iterative FFT ---"
 .LC44:	.string	"\n--- Recursive FFT ---"
 .LC47:	.string	"  SUMMARY TABLE"
@@ -235,6 +237,116 @@ stack_recursive:
 	.word	0
 	.word	0
 	.word	0
+
+
+# =============================================================================
+# correctness_check(a0: title_str, a1: n)
+# Mallocs twiddles + signal arrays, fills xr={1,1,...,1,0,...,0} (first n/2 ones)
+# runs iterative then recursive FFT and prints both outputs.
+# Uses s-regs so it is safe to call from main.
+# =============================================================================
+correctness_check:
+	addi	sp, sp, -96
+	sd	ra,  88(sp)
+	sd	s0,  80(sp)	# title string
+	sd	s1,  72(sp)	# n
+	sd	s2,  64(sp)	# tw_r
+	sd	s3,  56(sp)	# tw_i
+	sd	s4,  48(sp)	# xr
+	sd	s5,  40(sp)	# xi
+	sd	s6,  32(sp)	# half (n/2)
+
+	mv	s0, a0		# save title
+	mv	s1, a1		# save n
+
+	# print header
+	lla	a0, .LC27; call puts@plt
+	mv	a0, s0;    call puts@plt
+	lla	a0, .LC27; call puts@plt
+
+	# malloc tw_r = (n/2)*4 bytes
+	srliw	a5, s1, 1
+	slli	a5, a5, 2
+	mv	a0, a5; call malloc@plt; mv s2, a0
+
+	# malloc tw_i
+	srliw	a5, s1, 1
+	slli	a5, a5, 2
+	mv	a0, a5; call malloc@plt; mv s3, a0
+
+	# generate_twiddle_factors(tw_r, tw_i, n)
+	mv	a0, s2; mv a1, s3; mv a2, s1
+	call	generate_twiddle_factors@plt
+
+	# malloc xr, xi = n*4 bytes each
+	slli	a0, s1, 2; call malloc@plt; mv s4, a0
+	slli	a0, s1, 2; call malloc@plt; mv s5, a0
+
+	# fill xr = {1,1,...,1,0,...,0} (first n/2 ones), xi = all zeros
+	srliw	s6, s1, 1		# half = n/2
+	li	t0, 0
+.Lcc_fill:
+	bge	t0, s1, .Lcc_fill_done
+	slli	t1, t0, 2
+	add	t3, s4, t1		# &xr[t0]
+	add	t4, s5, t1		# &xi[t0]
+	bge	t0, s6, .Lcc_zero
+	li	t2, 0x3F800000		# IEEE 754 1.0
+	sw	t2, 0(t3)
+	j	.Lcc_imag
+.Lcc_zero:
+	sw	zero, 0(t3)
+.Lcc_imag:
+	sw	zero, 0(t4)		# xi always 0
+	addi	t0, t0, 1
+	j	.Lcc_fill
+.Lcc_fill_done:
+
+	# iterative
+	lla	a0, .LC43; call puts@plt
+	mv	a0, s4; mv a1, s5; mv a2, s2; mv a3, s3; mv a4, s1
+	call	fft_1d_iterative@plt
+	mv	a0, s4; mv a1, s5; mv a2, s1
+	call	print_fft
+
+	# refill xr, xi for recursive (iterative modified them in-place)
+	li	t0, 0
+.Lcc_refill:
+	bge	t0, s1, .Lcc_refill_done
+	slli	t1, t0, 2
+	add	t3, s4, t1		# &xr[t0]
+	add	t4, s5, t1		# &xi[t0]
+	bge	t0, s6, .Lcc_rzero
+	li	t2, 0x3F800000
+	sw	t2, 0(t3)
+	j	.Lcc_rimag
+.Lcc_rzero:
+	sw	zero, 0(t3)
+.Lcc_rimag:
+	sw	zero, 0(t4)
+	addi	t0, t0, 1
+	j	.Lcc_refill
+.Lcc_refill_done:
+
+	# recursive
+	lla	a0, .LC44; call puts@plt
+	mv	a0, s4; mv a1, s5; mv a2, s2; mv a3, s3; mv a4, s1
+	call	fft_1d_recursive@plt
+	mv	a0, s4; mv a1, s5; mv a2, s1
+	call	print_fft
+
+	# free everything
+	mv	a0, s2; call free@plt
+	mv	a0, s3; call free@plt
+	mv	a0, s4; call free@plt
+	mv	a0, s5; call free@plt
+
+	ld	ra,  88(sp)
+	ld	s0,  80(sp); ld s1,  72(sp); ld s2,  64(sp)
+	ld	s3,  56(sp); ld s4,  48(sp); ld s5,  40(sp)
+	ld	s6,  32(sp)
+	addi	sp, sp, 96
+	ret
 
 	.text
 	.align	2
@@ -276,38 +388,10 @@ main:
 	lla	a0,.LC41; call puts@plt
 	addi a0,s0,-104; li a1,8; call print_array
 
-	# ── CORRECTNESS CHECK n=8 ──────────────────────────────────
-	lla	a0,.LC27; call puts@plt
-	lla	a0,.LC42; call puts@plt
-	lla	a0,.LC27; call puts@plt
-	li a5,8; sw a5,-272(s0)
-	# malloc tw_r, tw_i (n/2 * 4 bytes)
-	lw a5,-272(s0); srliw a4,a5,31; addw a5,a4,a5; sraiw a5,a5,1; sext.w a5,a5; slli a5,a5,2; mv a0,a5; call malloc@plt; sd a0,-264(s0)
-	lw a5,-272(s0); srliw a4,a5,31; addw a5,a4,a5; sraiw a5,a5,1; sext.w a5,a5; slli a5,a5,2; mv a0,a5; call malloc@plt; sd a0,-256(s0)
-	lw a5,-272(s0); mv a2,a5; ld a1,-256(s0); ld a0,-264(s0)
-	call	generate_twiddle_factors@plt
-	# load x_r={1,1,1,1,0,0,0,0} x_i={0...} onto stack
-	lla a5,.LC1; ld a2,0(a5); ld a3,8(a5); ld a4,16(a5); ld a5,24(a5)
-	sd a2,-168(s0); sd a3,-160(s0); sd a4,-152(s0); sd a5,-144(s0)
-	sw zero,-136(s0); sw zero,-132(s0); sw zero,-128(s0); sw zero,-124(s0)
-	sw zero,-120(s0); sw zero,-116(s0); sw zero,-112(s0); sw zero,-108(s0)
-	lla	a0,.LC43; call puts@plt
-	lw a4,-272(s0); addi a1,s0,-136; addi a5,s0,-168; ld a3,-256(s0); ld a2,-264(s0); mv a0,a5
-	call	fft_1d_iterative@plt
-	lw a3,-272(s0); addi a4,s0,-136; addi a5,s0,-168; mv a2,a3; mv a1,a4; mv a0,a5
-	call	print_fft
-	# reload x_r2, x_i2
-	lla a5,.LC1; ld a2,0(a5); ld a3,8(a5); ld a4,16(a5); ld a5,24(a5)
-	sd a2,-104(s0); sd a3,-96(s0); sd a4,-88(s0); sd a5,-80(s0)
-	sw zero,-72(s0); sw zero,-68(s0); sw zero,-64(s0); sw zero,-60(s0)
-	sw zero,-56(s0); sw zero,-52(s0); sw zero,-48(s0); sw zero,-44(s0)
-	lla	a0,.LC44; call puts@plt
-	lw a4,-272(s0); addi a1,s0,-72; addi a5,s0,-104; ld a3,-256(s0); ld a2,-264(s0); mv a0,a5
-	call	fft_1d_recursive@plt
-	lw a3,-272(s0); addi a4,s0,-72; addi a5,s0,-104; mv a2,a3; mv a1,a4; mv a0,a5
-	call	print_fft
-	ld a0,-264(s0); call free@plt
-	ld a0,-256(s0); call free@plt
+	# ── CORRECTNESS CHECK n=8, 16, 32 ─────────────────────────
+	lla	a0, .LC42;  li a1, 8;  call correctness_check
+	lla	a0, .LC42b; li a1, 16; call correctness_check
+	lla	a0, .LC42c; li a1, 32; call correctness_check
 
 	# ── SUMMARY TABLE ──────────────────────────────────────────
 	lla	a0,.LC27; call puts@plt
