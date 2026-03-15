@@ -386,9 +386,30 @@ bit_reverse_array:
 # =============================================================================
     .align 2
     .globl fft_1d_iterative
+    .globl butterfly_iterative
 
 # fft_1d_iterative(a0:xr, a1:xi, a2:twr, a3:twi, a4:n)
+#   Wrapper entry point. Delegates to butterfly_iterative.
 fft_1d_iterative:
+    addi    sp, sp, -48
+    sd      ra, 40(sp)
+    sd      s0, 32(sp); sd s1, 24(sp)
+    sd      s2, 16(sp); sd s3,  8(sp); sd s4, 0(sp)
+    mv      s0, a0; mv s1, a1; mv s2, a2; mv s3, a3; mv s4, a4
+    li      t0, 1
+    ble     s4, t0, .L_fft1d_iter_done
+    mv      a0, s0; mv a1, s1; mv a2, s2; mv a3, s3; mv a4, s4
+    call    butterfly_iterative
+.L_fft1d_iter_done:
+    ld      ra, 40(sp)
+    ld      s0, 32(sp); ld s1, 24(sp)
+    ld      s2, 16(sp); ld s3,  8(sp); ld s4, 0(sp)
+    addi    sp, sp, 48
+    ret
+
+# butterfly_iterative(a0:xr, a1:xi, a2:twr, a3:twi, a4:n)
+#   Full in-place iterative Cooley-Tukey FFT (bit-reversal + butterfly stages).
+butterfly_iterative:
     addi    sp, sp, -128
     sd      ra, 120(sp)
     sd      s0, 112(sp); sd s1, 104(sp); sd s2,  96(sp); sd s3,  88(sp); sd s4, 80(sp)
@@ -675,3 +696,6 @@ recursive_butterfly_core:
 
 .L_rbc_ret:
     ret
+
+
+# =============================================================================
